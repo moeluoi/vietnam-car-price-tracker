@@ -3,8 +3,9 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import time
 
-# --- PAGE CONFIGURATION ---
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Vietnam Car Price Tracker Dashboard",
     page_icon="🚗",
@@ -12,30 +13,23 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# --- 1. DATA SOURCE (GOOGLE SHEETS) ---
+# --- 2. DATA SOURCE ---
 SHEET_URL = st.secrets.get(
     "GSHEET_URL",
-    "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/export?format=csv&gid=0"
+    "https://docs.google.com/spreadsheets/d/1v8kbRlDssd2GX19NzDAWwq5b-5UQjNQmVBolsg9o_GU/export?format=csv&gid=1347234593"
 )
 
-# --- ROBUST LIVE DATA LOADER ---
+# --- 3. ROBUST LIVE DATA LOADER ---
 @st.cache_data(ttl=600)
 def load_data_from_gsheet(url: str):
-    # 1. Read CSV from Google Sheets
     df = pd.read_csv(url)
-    
-    # NEW: Strip any hidden trailing/leading spaces from Google Sheet column headers
     df.columns = df.columns.str.strip()
     
-    # 2. Helper function to sanitize text columns into pure numeric floats
     def clean_number(col_series):
         if col_series is None:
             return pd.Series(dtype=float)
         
-        # Convert series to string, handle potential object types
         s = col_series.astype(str).str.strip()
-        
-        # Remove common non-numeric artifacts: currency symbols, spaces, VND tags
         s = (
             s.str.replace("₫", "", regex=False)
             .str.replace("VND", "", regex=False)
@@ -43,17 +37,13 @@ def load_data_from_gsheet(url: str):
             .str.replace(" ", "", regex=False)
         )
         
-        # 1st Pass: Try direct numeric parsing (handles standard floats, ints, and scientific notation)
         numeric_direct = pd.to_numeric(s, errors="coerce")
-        
-        # 2nd Pass: Catch values that failed due to thousand-separator commas (e.g., "528,000,000")
         mask_nan = numeric_direct.isna() & (s != "nan") & (s != "")
         if mask_nan.any():
             s_no_comma = s[mask_nan].str.replace(",", "", regex=False)
             numeric_no_comma = pd.to_numeric(s_no_comma, errors="coerce")
             numeric_direct.loc[mask_nan] = numeric_no_comma
             
-            # 3rd Pass: Catch values that still failed due to Vietnamese dot-separators (e.g., "528.000.000")
             mask_still_nan = numeric_direct.isna() & (s != "nan") & (s != "")
             if mask_still_nan.any():
                 s_no_dot = s[mask_still_nan].str.replace(".", "", regex=False)
@@ -61,7 +51,6 @@ def load_data_from_gsheet(url: str):
                 
         return numeric_direct
 
-    # 3. Apply the cleaning function to all price columns
     numeric_cols = [
         "Listed MSRP (VND)",
         "Cash Discount (VND)",
@@ -75,17 +64,13 @@ def load_data_from_gsheet(url: str):
         if col in df.columns:
             df[col] = clean_number(df[col])
         else:
-            # Fallback if column is completely missing from the sheet
             df[col] = 0.0
 
-    # 4. Drop empty or invalid rows (now using safely cleaned data)
     df = df.dropna(subset=["Model", "Trim / Variant", "Listed MSRP (VND)"]).copy()
     
-    # 5. Parse dates safely
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     
-    # 6. Convert to Millions (VND) - Division will now work perfectly
     df["MSRP_M"] = df["Listed MSRP (VND)"] / 1e6
     df["Cash_Discount_M"] = df["Cash Discount (VND)"] / 1e6
     df["Net_HN_M"] = df["Net Price HN (VND)"] / 1e6
@@ -93,25 +78,28 @@ def load_data_from_gsheet(url: str):
     df["OnRoad_HCM_M"] = df["Estimated On-Road HCM (VND)"] / 1e6
     df["OnRoad_HN_M"] = df["Estimated On-Road HN (VND)"] / 1e6
     
-    # 7. Automated metric calculations
     df["Discount_Amount_M"] = df["MSRP_M"] - df["Net_HN_M"]
     df["Discount_Pct"] = (df["Discount_Amount_M"] / df["MSRP_M"].replace(0, np.nan)) * 100
     df["Full_Variant_Name"] = df["Brand"].astype(str) + " " + df["Model"].astype(str) + " - " + df["Trim / Variant"].astype(str)
     
     return df
 
-# --- 3. SIDEBAR CONTROLS & FILTERS ---
-st.sidebar.header("🔍 Filters & Refresh")
+# --- 4. EXECUTE LOADER & DEFINE df_raw ---
+try:
+    # Adding a timestamp to bypass Google's CDN cache if needed
+    live_url = f"{SHEET_URL}&_t={int(time.time())}"
+    df_raw = load_data_from_gsheet(live_url)
+except Exception as e:
+    st.error(f"Failed to fetch data from Google Sheets: {e}")
+    st.stop()
 
-# Add a random parameter to the URL to bypass Google's aggressive CDN cache
-import time
-live_url = f"{SHEET_URL}&_t={int(time.time())}"
+# --- 5. SIDEBAR CONTROLS & FILTERS ---
+st.sidebar.header("🔍 Filters & Refresh")
 
 if st.sidebar.button("🔄 Force Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
-# Diagnostic block to see exactly what Google Sheets is sending
 with st.sidebar.expander("🛠️ Data Diagnostics"):
     st.write(f"Total Rows Loaded: {len(df_raw)}")
     st.write(f"Brands in Sheet: {', '.join(df_raw['Brand'].dropna().unique())}")
@@ -119,7 +107,6 @@ with st.sidebar.expander("🛠️ Data Diagnostics"):
 all_brands = sorted(df_raw["Brand"].dropna().unique().tolist())
 selected_brands = st.sidebar.multiselect("Brand", all_brands, default=all_brands)
 
-# FIX: If user clicks 'x' and clears the box, default to selecting everything
 if not selected_brands:
     selected_brands = all_brands
 
@@ -129,7 +116,6 @@ selected_models = st.sidebar.multiselect("Model", available_models, default=avai
 if not selected_models:
     selected_models = available_models
 
-# Apply filters safely
 df_filtered = df_raw[
     (df_raw["Brand"].isin(selected_brands)) & 
     (df_raw["Model"].isin(selected_models))
@@ -144,15 +130,18 @@ if selected_variants:
 region = st.sidebar.radio("Active Region for Net Price", ["Hà Nội (HN)", "TP. Hồ Chí Minh (HCM)"])
 active_net_col = "Net_HN_M" if "HN" in region else "Net_HCM_M"
 
-# --- 4. MAIN DASHBOARD CONTENT ---
+st.sidebar.markdown("---")
+st.sidebar.caption("💡 *Synced live with Google Sheets.*")
+
+# --- 6. MAIN DASHBOARD CONTENT ---
 st.title("🚗 Vietnam Automobile Price & Promo Tracker")
 st.markdown("Real-time pricing analysis across market segments, listed MSRP, and cash discounts.")
 
 if df_filtered.empty:
-    st.warning("⚠️ No data matches your current filter selection. Please reset or broaden your filters in the sidebar.")
+    st.warning("⚠️ No data matches your current filter selection.")
     st.stop()
 
-# --- 5. KPI SUMMARY CARDS ---
+# --- 7. KPI SUMMARY CARDS ---
 st.subheader("📌 Key Market Highlights")
 
 top_cash_trims = df_filtered.sort_values(by="Cash_Discount_M", ascending=False).head(3)
@@ -193,31 +182,28 @@ with col3:
 
 st.markdown("---")
 
-# --- 6. CHARTS 1 & 2 ---
+# --- 8. CHARTS 1 & 2 ---
 row1_col1, row1_col2 = st.columns([6, 5])
 
-# Chart 1: Clustered Column Chart (MSRP vs Net Price)
 with row1_col1:
     st.subheader("📊 Chart 1: Listed MSRP vs. Net Price")
     
-    chart1_data = df_filtered.copy()
     fig1 = go.Figure()
-    
     fig1.add_trace(go.Bar(
-        x=chart1_data["Full_Variant_Name"],
-        y=chart1_data["MSRP_M"],
+        x=df_filtered["Full_Variant_Name"],
+        y=df_filtered["MSRP_M"],
         name="Listed MSRP",
         marker_color="#1f77b4",
-        text=chart1_data["MSRP_M"].apply(lambda v: f"{v:,.0f}M"),
+        text=df_filtered["MSRP_M"].apply(lambda v: f"{v:,.0f}M" if pd.notnull(v) else ""),
         textposition="outside"
     ))
     
     fig1.add_trace(go.Bar(
-        x=chart1_data["Full_Variant_Name"],
-        y=chart1_data[active_net_col],
+        x=df_filtered["Full_Variant_Name"],
+        y=df_filtered[active_net_col],
         name=f"Net Price ({region.split()[0]})",
         marker_color="#e74c3c",
-        text=chart1_data[active_net_col].apply(lambda v: f"{v:,.0f}M"),
+        text=df_filtered[active_net_col].apply(lambda v: f"{v:,.0f}M" if pd.notnull(v) else ""),
         textposition="outside"
     ))
     
@@ -231,7 +217,6 @@ with row1_col1:
     )
     st.plotly_chart(fig1, use_container_width=True)
 
-# Chart 2: Ranked Horizontal Bar Chart (Cash Discounts by Model)
 with row1_col2:
     st.subheader("🏆 Chart 2: Top Cash Discounts by Model")
     
@@ -254,10 +239,7 @@ with row1_col2:
         labels={"Cash_Discount_M": "Max Cash Discount (Million VND)", "Model_Label": "Model"}
     )
     
-    fig2.update_traces(
-        texttemplate="%{text:,.0f}M VND",
-        textposition="outside"
-    )
+    fig2.update_traces(texttemplate="%{text:,.0f}M VND", textposition="outside")
     fig2.update_layout(
         coloraxis_showscale=False,
         margin=dict(l=20, r=40, t=30, b=40),
@@ -266,7 +248,7 @@ with row1_col2:
     )
     st.plotly_chart(fig2, use_container_width=True)
 
-# --- 7. CHART 3 (TIMELINE) ---
+# --- 9. CHART 3 (TIMELINE) ---
 st.subheader("📈 Chart 3: Estimated On-Road Price TP. HCM Over Time")
 
 timeline_df = df_filtered.dropna(subset=["Date"]).sort_values(by="Date")
@@ -280,12 +262,7 @@ if timeline_df["Date"].nunique() > 1:
         markers=True,
         labels={"OnRoad_HCM_M": "On-Road HCM (Million VND)", "Date": "Recorded Date", "Full_Variant_Name": "Variant"}
     )
-    fig3.update_layout(
-        hovermode="x unified",
-        margin=dict(l=20, r=20, t=20, b=40),
-        height=400,
-        legend=dict(orientation="h", yanchor="top", y=-0.25)
-    )
+    fig3.update_layout(hovermode="x unified", margin=dict(l=20, r=20, t=20, b=40), height=400)
     st.plotly_chart(fig3, use_container_width=True)
 else:
     fig3 = px.bar(
@@ -302,7 +279,7 @@ else:
 
 st.markdown("---")
 
-# --- 8. DYNAMIC DATA TABLE ---
+# --- 10. DYNAMIC DATA TABLE ---
 st.subheader("📋 Model Price & Discount Summary Table")
 
 display_cols = [
@@ -327,8 +304,4 @@ if "Discount_Amount_M" in styled_table.columns:
 if "Discount_Pct" in styled_table.columns:
     format_dict["Discount_Pct"] = "{:.2f}%"
 
-st.dataframe(
-    styled_table.style.format(format_dict),
-    use_container_width=True,
-    height=360
-)
+st.dataframe(styled_table.style.format(format_dict), use_container_width=True, height=360)
