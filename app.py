@@ -13,7 +13,7 @@ st.set_page_config(
 # Fetch URL from Streamlit secrets or fallback to direct URL
 SHEET_URL = st.secrets.get(
     "GSHEET_URL",
-    "https://docs.google.com/spreadsheets/d/<YOUR_SPREADSHEET_ID>/export?format=csv&gid=0"
+    "https://docs.google.com/spreadsheets/d/1v8kbRlDssd2GX19NzDAWwq5b-5UQjNQmVBolsg9o_GU/export?format=csv&gid=1347234593"
 )
 
 # --- LIVE DATA LOADER (Auto-refreshes every 600s / 10 mins) ---
