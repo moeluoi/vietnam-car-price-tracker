@@ -18,12 +18,16 @@ SHEET_URL = st.secrets.get(
     "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/export?format=csv&gid=0"
 )
 
-# --- 2. ROBUST LIVE DATA LOADER ---
+# --- ROBUST LIVE DATA LOADER ---
 @st.cache_data(ttl=600)
 def load_data_from_gsheet(url: str):
+    # 1. Read CSV from Google Sheets
     df = pd.read_csv(url)
     
-    # Helper function to sanitize text strings into clean floats robustly
+    # NEW: Strip any hidden trailing/leading spaces from Google Sheet column headers
+    df.columns = df.columns.str.strip()
+    
+    # 2. Helper function to sanitize text columns into pure numeric floats
     def clean_number(col_series):
         if col_series is None:
             return pd.Series(dtype=float)
@@ -39,7 +43,7 @@ def load_data_from_gsheet(url: str):
             .str.replace(" ", "", regex=False)
         )
         
-        # 1st Pass: Try direct numeric parsing (handles standard floats, ints, and scientific notation like '5.28e+08')
+        # 1st Pass: Try direct numeric parsing (handles standard floats, ints, and scientific notation)
         numeric_direct = pd.to_numeric(s, errors="coerce")
         
         # 2nd Pass: Catch values that failed due to thousand-separator commas (e.g., "528,000,000")
@@ -57,14 +61,31 @@ def load_data_from_gsheet(url: str):
                 
         return numeric_direct
 
-    # Drop empty or invalid metadata rows
+    # 3. Apply the cleaning function to all price columns
+    numeric_cols = [
+        "Listed MSRP (VND)",
+        "Cash Discount (VND)",
+        "Net Price HN (VND)",
+        "Net Price HCM (VND)",
+        "Estimated On-Road HN (VND)",
+        "Estimated On-Road HCM (VND)"
+    ]
+    
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = clean_number(df[col])
+        else:
+            # Fallback if column is completely missing from the sheet
+            df[col] = 0.0
+
+    # 4. Drop empty or invalid rows (now using safely cleaned data)
     df = df.dropna(subset=["Model", "Trim / Variant", "Listed MSRP (VND)"]).copy()
     
-    # Parse dates safely
+    # 5. Parse dates safely
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     
-    # Convert VND values to Millions for readable visualization
+    # 6. Convert to Millions (VND) - Division will now work perfectly
     df["MSRP_M"] = df["Listed MSRP (VND)"] / 1e6
     df["Cash_Discount_M"] = df["Cash Discount (VND)"] / 1e6
     df["Net_HN_M"] = df["Net Price HN (VND)"] / 1e6
@@ -72,19 +93,12 @@ def load_data_from_gsheet(url: str):
     df["OnRoad_HCM_M"] = df["Estimated On-Road HCM (VND)"] / 1e6
     df["OnRoad_HN_M"] = df["Estimated On-Road HN (VND)"] / 1e6
     
-    # Automated metric formulas
+    # 7. Automated metric calculations
     df["Discount_Amount_M"] = df["MSRP_M"] - df["Net_HN_M"]
     df["Discount_Pct"] = (df["Discount_Amount_M"] / df["MSRP_M"].replace(0, np.nan)) * 100
     df["Full_Variant_Name"] = df["Brand"].astype(str) + " " + df["Model"].astype(str) + " - " + df["Trim / Variant"].astype(str)
     
     return df
-
-# Load the live data
-try:
-    df_raw = load_data_from_gsheet(SHEET_URL)
-except Exception as e:
-    st.error(f"Failed to fetch data from Google Sheets: {e}")
-    st.stop()
 
 # --- 3. SIDEBAR CONTROLS & FILTERS ---
 st.sidebar.header("🔍 Filters & Refresh")
