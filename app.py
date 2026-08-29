@@ -17,18 +17,48 @@ SHEET_URL = st.secrets.get(
 )
 
 # --- LIVE DATA LOADER (Auto-refreshes every 600s / 10 mins) ---
+# --- ROBUST LIVE DATA LOADER ---
 @st.cache_data(ttl=600)
 def load_data_from_gsheet(url: str):
-    # Reads the live CSV stream from Google Sheets
+    # 1. Read the live CSV from Google Sheets
     df = pd.read_csv(url)
     
-    # Drop empty/incomplete rows
+    # 2. Helper function to sanitize and convert dirty text columns into pure numeric floats
+    def clean_number(col_series):
+        if col_series is None:
+            return pd.Series(dtype=float)
+        # Convert to string, remove spaces, currency symbols, and commas/dots if formatted
+        s = col_series.astype(str).str.strip()
+        s = s.str.replace("₫", "", regex=False)\
+             .str.replace("VND", "", regex=False)\
+             .str.replace(" ", "", regex=False)\
+             .str.replace(",", "", regex=False)
+        return pd.to_numeric(s, errors="coerce")
+
+    # 3. Convert all monetary columns safely
+    numeric_cols = [
+        "Listed MSRP (VND)",
+        "Cash Discount (VND)",
+        "Net Price HN (VND)",
+        "Net Price HCM (VND)",
+        "Estimated On-Road HN (VND)",
+        "Estimated On-Road HCM (VND)"
+    ]
+    
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = clean_number(df[col])
+        else:
+            df[col] = 0.0
+
+    # 4. Drop empty or invalid rows
     df = df.dropna(subset=["Model", "Trim / Variant", "Listed MSRP (VND)"]).copy()
     
-    # Parse dates
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    # 5. Parse dates safely
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     
-    # Convert VND values to Millions for clear visual formatting
+    # 6. Now safe to perform mathematical division
     df["MSRP_M"] = df["Listed MSRP (VND)"] / 1e6
     df["Cash_Discount_M"] = df["Cash Discount (VND)"] / 1e6
     df["Net_HN_M"] = df["Net Price HN (VND)"] / 1e6
@@ -36,10 +66,10 @@ def load_data_from_gsheet(url: str):
     df["OnRoad_HCM_M"] = df["Estimated On-Road HCM (VND)"] / 1e6
     df["OnRoad_HN_M"] = df["Estimated On-Road HN (VND)"] / 1e6
     
-    # Automated metrics
+    # 7. Automated metric calculations
     df["Discount_Amount_M"] = df["MSRP_M"] - df["Net_HN_M"]
-    df["Discount_Pct"] = (df["Discount_Amount_M"] / df["MSRP_M"]) * 100
-    df["Full_Variant_Name"] = df["Brand"] + " " + df["Model"] + " - " + df["Trim / Variant"]
+    df["Discount_Pct"] = (df["Discount_Amount_M"] / df["MSRP_M"].replace(0, np.nan)) * 100
+    df["Full_Variant_Name"] = df["Brand"].astype(str) + " " + df["Model"].astype(str) + " - " + df["Trim / Variant"].astype(str)
     
     return df
 
