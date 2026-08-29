@@ -15,7 +15,7 @@ st.set_page_config(
 # --- 1. DATA SOURCE (GOOGLE SHEETS) ---
 SHEET_URL = st.secrets.get(
     "GSHEET_URL",
-    "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/export?format=csv&gid=0"
+    "https://docs.google.com/spreadsheets/d/1v8kbRlDssd2GX19NzDAWwq5b-5UQjNQmVBolsg9o_GU/export?format=csv&gid=13472345930"
 )
 
 # --- 2. ROBUST LIVE DATA LOADER ---
