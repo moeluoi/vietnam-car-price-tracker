@@ -15,7 +15,7 @@ st.set_page_config(
 # --- 1. DATA SOURCE (GOOGLE SHEETS) ---
 SHEET_URL = st.secrets.get(
     "GSHEET_URL",
-    "https://docs.google.com/spreadsheets/d/1v8kbRlDssd2GX19NzDAWwq5b-5UQjNQmVBolsg9o_GU/export?format=csv&gid=13472345930"
+    "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/export?format=csv&gid=0"
 )
 
 # --- 2. ROBUST LIVE DATA LOADER ---
@@ -23,33 +23,39 @@ SHEET_URL = st.secrets.get(
 def load_data_from_gsheet(url: str):
     df = pd.read_csv(url)
     
-    # Helper function to sanitize text strings into clean floats
+    # Helper function to sanitize text strings into clean floats robustly
     def clean_number(col_series):
         if col_series is None:
             return pd.Series(dtype=float)
+        
+        # Convert series to string, handle potential object types
         s = col_series.astype(str).str.strip()
+        
+        # Remove common non-numeric artifacts: currency symbols, spaces, VND tags
         s = (
             s.str.replace("₫", "", regex=False)
             .str.replace("VND", "", regex=False)
+            .str.replace("vnđ", "", regex=False)
             .str.replace(" ", "", regex=False)
-            .str.replace(",", "", regex=False)
         )
-        return pd.to_numeric(s, errors="coerce")
-
-    numeric_cols = [
-        "Listed MSRP (VND)",
-        "Cash Discount (VND)",
-        "Net Price HN (VND)",
-        "Net Price HCM (VND)",
-        "Estimated On-Road HN (VND)",
-        "Estimated On-Road HCM (VND)"
-    ]
-    
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = clean_number(df[col])
-        else:
-            df[col] = 0.0
+        
+        # 1st Pass: Try direct numeric parsing (handles standard floats, ints, and scientific notation like '5.28e+08')
+        numeric_direct = pd.to_numeric(s, errors="coerce")
+        
+        # 2nd Pass: Catch values that failed due to thousand-separator commas (e.g., "528,000,000")
+        mask_nan = numeric_direct.isna() & (s != "nan") & (s != "")
+        if mask_nan.any():
+            s_no_comma = s[mask_nan].str.replace(",", "", regex=False)
+            numeric_no_comma = pd.to_numeric(s_no_comma, errors="coerce")
+            numeric_direct.loc[mask_nan] = numeric_no_comma
+            
+            # 3rd Pass: Catch values that still failed due to Vietnamese dot-separators (e.g., "528.000.000")
+            mask_still_nan = numeric_direct.isna() & (s != "nan") & (s != "")
+            if mask_still_nan.any():
+                s_no_dot = s[mask_still_nan].str.replace(".", "", regex=False)
+                numeric_direct.loc[mask_still_nan] = pd.to_numeric(s_no_dot, errors="coerce")
+                
+        return numeric_direct
 
     # Drop empty or invalid metadata rows
     df = df.dropna(subset=["Model", "Trim / Variant", "Listed MSRP (VND)"]).copy()
