@@ -83,16 +83,33 @@ except Exception as e:
 # --- 3. SIDEBAR CONTROLS & FILTERS ---
 st.sidebar.header("🔍 Filters & Refresh")
 
+# Add a random parameter to the URL to bypass Google's aggressive CDN cache
+import time
+live_url = f"{SHEET_URL}&_t={int(time.time())}"
+
 if st.sidebar.button("🔄 Force Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
+# Diagnostic block to see exactly what Google Sheets is sending
+with st.sidebar.expander("🛠️ Data Diagnostics"):
+    st.write(f"Total Rows Loaded: {len(df_raw)}")
+    st.write(f"Brands in Sheet: {', '.join(df_raw['Brand'].dropna().unique())}")
+
 all_brands = sorted(df_raw["Brand"].dropna().unique().tolist())
 selected_brands = st.sidebar.multiselect("Brand", all_brands, default=all_brands)
+
+# FIX: If user clicks 'x' and clears the box, default to selecting everything
+if not selected_brands:
+    selected_brands = all_brands
 
 available_models = sorted(df_raw[df_raw["Brand"].isin(selected_brands)]["Model"].dropna().unique().tolist())
 selected_models = st.sidebar.multiselect("Model", available_models, default=available_models)
 
+if not selected_models:
+    selected_models = available_models
+
+# Apply filters safely
 df_filtered = df_raw[
     (df_raw["Brand"].isin(selected_brands)) & 
     (df_raw["Model"].isin(selected_models))
@@ -106,9 +123,6 @@ if selected_variants:
 
 region = st.sidebar.radio("Active Region for Net Price", ["Hà Nội (HN)", "TP. Hồ Chí Minh (HCM)"])
 active_net_col = "Net_HN_M" if "HN" in region else "Net_HCM_M"
-
-st.sidebar.markdown("---")
-st.sidebar.caption("💡 *Synced live with Google Sheets.*")
 
 # --- 4. MAIN DASHBOARD CONTENT ---
 st.title("🚗 Vietnam Automobile Price & Promo Tracker")
